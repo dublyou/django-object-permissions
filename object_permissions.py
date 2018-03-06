@@ -1,5 +1,8 @@
 from collections import Iterable
 
+from django.contrib.auth.mixins import AccessMixin
+from django.core.exceptions import ImproperlyConfigured
+from django.contrib.auth.views import redirect_to_login
 
 def get_attr_mult(obj, attr):
     attrs = attr.split("__", 1)
@@ -84,3 +87,42 @@ class PermissionLogic(object):
 
     def has_perm(self, action):
         return action in self.actions
+
+
+class ObjectPermissionsMixin(AccessMixin):
+    permission_logic = None
+    permissions = None
+    permission_required = None
+    login_required = False
+    object = None
+
+    def has_permission(self, **kwargs):
+        logic = self.permission_logic
+        if "instance" not in kwargs:
+            instance = self.get_object()
+        else:
+            instance = kwargs["instance"]
+        if logic is None or instance is None:
+            raise ImproperlyConfigured(
+                '{0} is missing the permission_logic attribute. Define {0}.permission_required, or override '
+                '{0}.get_permission_required().'.format(self.__class__.__name__)
+            )
+        else:
+            self.permissions = logic(self.request, instance, **kwargs)
+            return self.permissions.has_perm(self.permission_required)
+
+    def handle_no_permission(self, authenticated=None):
+        print("no permission for {}".format(self.permission_required))
+        if authenticated is None:
+            authenticated = self.request.user.is_authenticated
+        if authenticated:
+            return render(self.request, "error/404.html")
+        else:
+            return redirect_to_login(self.request.get_full_path(), self.get_login_url(), self.get_redirect_field_name())
+
+    def dispatch(self, request, *args, **kwargs):
+        if self.login_required and not request.user.is_authenticated:
+            return self.handle_no_permission(authenticated=False)
+        if not self.has_permission(**kwargs):
+            return self.handle_no_permission()
+        return super(ObjectPermissionsMixin, self).dispatch(request, *args, **kwargs)
